@@ -3,8 +3,11 @@ const config = require('./config.js');
 const multer = require('multer')({ dest: `./${config.folders.temp}` });
 const api = require('./api.js');
 let app = express();
-app.use(express.json());
+app.use(express.json({
+  limit: config.maxUploadSize,
+}));
 app.use(express.urlencoded({
+  limit: config.maxUploadSize,
   extended: true
 }));
 app.get('/', (req, res) => res.redirect('/dashboard'));

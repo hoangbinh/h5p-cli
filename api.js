@@ -44,7 +44,7 @@ module.exports = {
       }
       let input = {
         assets: config.folders.assets,
-        host: `${request.protocol}://${request.get('host')}`,
+        host: config.baseUrl ? config.baseUrl : `${request.protocol}://${request.get('host')}`,
         status: session.status,
         language: session.language,
         languages: JSON.stringify(languages)
@@ -409,7 +409,7 @@ module.exports = {
   // endpoint that lists library data; used as ajax request by the content type editors;
   ajaxLibraries: async (request, response, next) => {
     try {
-      const baseUrl = `${request.protocol}://${request.get('host')}`;
+      const baseUrl = config.baseUrl ? config.baseUrl : `${request.protocol}://${request.get('host')}`;
       const registry = await logic.getRegistry();
       let libraries = [request.params.library];
       if (Array.isArray(request.body.libraries)) {
@@ -474,7 +474,7 @@ module.exports = {
   // html page that initializes and renders h5p content type editors
   edit: async (request, response, next) => {
     try {
-      const baseUrl = `${request.protocol}://${request.get('host')}`;
+      const baseUrl = config.baseUrl ? config.baseUrl : `${request.protocol}://${request.get('host')}`;
       const library = request.params.library;
       const folder = request.params.folder;
       if (!await verifySetup(library, response)) {
@@ -568,7 +568,7 @@ module.exports = {
   // html page that initializes and renders h5p content types
   view: async (request, response, next) => {
     try {
-      const baseUrl = `${request.protocol}://${request.get('host')}`;
+      const baseUrl = config.baseUrl ? config.baseUrl : `${request.protocol}://${request.get('host')}`;
       const library = request.params.library;
       const folder = request.params.folder;
       if (!await verifySetup(library, response)) {
