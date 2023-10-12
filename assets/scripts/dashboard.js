@@ -131,7 +131,7 @@ function dashboard(options) {
       if (window.confirm(`Are you sure you want to delete "content/${project}"?`)) {
         this.showStatus('...');
         const output = await (await fetch(`${options.host}/remove/${project}`, {method: 'post'})).json();
-        this.showStatus(output.result);
+        this.showStatus(output?.result || output?.error || output);
         this.getPage();
       }
     }

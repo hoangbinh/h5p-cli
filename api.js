@@ -47,7 +47,8 @@ module.exports = {
         host: config.baseUrl ? config.baseUrl : `${request.protocol}://${request.get('host')}`,
         status: session.status,
         language: session.language,
-        languages: JSON.stringify(languages)
+        languages: JSON.stringify(languages),
+        delete: config.contentDeletable ? '' : 'hidden'
       }
       input = {...input, ...labels};
       response.set('Content-Type', 'text/html');
@@ -197,6 +198,9 @@ module.exports = {
   // deletes a content folder
   remove: (request, response, next) => {
     try {
+      if (!config.contentDeletable) {
+        throw `cannot removed "content/${request.params.folder}"`;
+      }
       fs.rmSync(`content/${request.params.folder}`, { recursive: true, force: true });
       response.set('Content-Type', 'application/json');
       response.end(JSON.stringify({result: `removed "content/${request.params.folder}"`}));
@@ -555,7 +559,8 @@ module.exports = {
         libraryConfig: JSON.stringify(libraryConfig),
         language: session.language,
         watcher: config.files.watch,
-        simple: request.query.simple ? 'hidden' : ''
+        simple: request.query.simple ? 'hidden' : '',
+        delete: config.contentDeletable ? '' : 'hidden'
       }
       input = {...input, ...labels};
       response.set('Content-Type', 'text/html');
@@ -646,7 +651,8 @@ module.exports = {
         metadata,
         contentUserData: JSON.stringify(userData.resume),
         watcher: config.files.watch,
-        simple: request.query.simple ? 'hidden' : ''
+        simple: request.query.simple ? 'hidden' : '',
+        delete: config.contentDeletable ? '' : 'hidden'
       }
       input = {...input, ...labels};
       response.set('Content-Type', 'text/html');

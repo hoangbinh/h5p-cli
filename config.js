@@ -2,6 +2,7 @@ module.exports = {
   baseUrl: 'http://localhost:8080',
   port: 8080,
   maxUploadSize: '50mb',
+  contentDeletable: true,
   mediaTypes: ['images', 'audios', 'videos'],
   folders: {
     assets: 'assets',

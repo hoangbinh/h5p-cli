@@ -145,7 +145,7 @@
   });
   if ({watcher}) {
     var watcher = document.createElement('script');
-    watcher.setAttribute('src', `http://${location.host.split(':')[0]}:35729/livereload.js?snipver=1`);
+    watcher.setAttribute('src', `${location.protocol}//${location.host.split(':')[0]}:35729/livereload.js?snipver=1`);
     document.head.appendChild(watcher);
   }
 </script>
@@ -159,7 +159,7 @@
         <a class="button dashboard" href="/dashboard"><span class="button-label">{lang_dashboard}</span></a>
       </div>
       <div class="col50 align-right">
-        <div class="button delete" id="deleteButton"><span class="button-label">{lang_Delete}</span></div>
+        <div class="button delete {delete}" id="deleteButton"><span class="button-label">{lang_Delete}</span></div>
         <a class="button view" href="/view/{library}/{folder}"><span class="button-label">{lang_View}</span></a>
       </div>
     </div>
