@@ -2,7 +2,7 @@ module.exports = {
   baseUrl: 'http://localhost:8080',
   port: 8080,
   maxUploadSize: '50mb',
-  contentDeletable: true,
+  contentDeletable: false,
   mediaTypes: ['images', 'audios', 'videos'],
   folders: {
     assets: 'assets',
@@ -32,7 +32,14 @@ module.exports = {
     clone: ['h5p-editor-php-library', 'h5p-php-library'],
     setup: ['h5p-math-display']
   },
-  registry: 'libraryRegistry.json'
+  registry: 'libraryRegistry.json',
+  authenticate: {
+    enable: true,
+    users: [
+      { id: 1, name: 'admin', password: '123', roles: ['admin'] },
+      { id: 2, name: 'user', password: '321', roles: ['user'] }
+    ]
+  }
 }
 // files.patterns.allowed & files.patterns.ignored are used in the export logic to determine which files are allowed/ignored in the .h5p zip archive
 module.exports.files.patterns.allowed = process.env.h5p_cli_allowed_files ? new RegExp(process.env.h5p_cli_allowed_files, process.env.h5p_cli_allowed_modifiers) : module.exports.files.patterns.allowed;

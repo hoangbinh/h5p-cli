@@ -10,7 +10,19 @@ app.use(express.urlencoded({
   limit: config.maxUploadSize,
   extended: true
 }));
-app.get('/', (req, res) => res.redirect('/dashboard'));
+if (config.authenticate.enable) {
+  app.get('/', (req, res) => res.redirect('/login'));
+  const passport = require('./auth.js')(app);
+  app.use((req, res, next) => {
+    if (req.isAuthenticated()) {
+      next();
+    } else {
+      res.redirect('/login');
+    }
+  });  
+} else {
+  app.get('/', (req, res) => res.redirect('/dashboard'));
+}
 app.get('/favicon.ico', api.favicon);
 app.get('/dashboard', api.dashboard);
 app.get('/projects', api.projects);
