@@ -139,6 +139,9 @@ module.exports = {
     try {
       request.params.folder = request.params.folder.replaceAll(/[^a-zA-Z0-9 -]/g, '');
       request.params.folder = request.params.folder.replaceAll(' ', '-');
+      if (fs.existsSync(`content/${request.params.folder}`)) {
+        throw `"content/${request.params.folder}" folder already exists`;
+      }
       const path = logic.import(request.params.folder, request.file.path);
       fs.rmSync(request.file.path);
       response.set('Content-Type', 'application/json');
@@ -240,8 +243,8 @@ module.exports = {
         });
       }
       list.sort((a, b) => {
-        const first = a.folder.toLowerCase();
-        const second = b.folder.toLowerCase();
+        const first = a.title.toLowerCase();
+        const second = b.title.toLowerCase();
         if (first < second) {
           return -1;
         }
