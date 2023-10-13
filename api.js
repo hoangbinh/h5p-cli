@@ -240,8 +240,8 @@ module.exports = {
         });
       }
       list.sort((a, b) => {
-        const first = a.title.toLowerCase();
-        const second = b.title.toLowerCase();
+        const first = a.folder.toLowerCase();
+        const second = b.folder.toLowerCase();
         if (first < second) {
           return -1;
         }
