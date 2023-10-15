@@ -150,7 +150,7 @@ const cli = {
           continue;
         }
         console.log(`>> + installing ${item}`);
-        logic.clone('h5p', item, 'master', item);
+        logic.clone(config.core.org ?? 'h5p', item, config.core.branch ?? 'master', item);
       }
       for (let item of config.core.setup) {
         await cli.setup(item);

@@ -18,7 +18,7 @@ module.exports = {
     }
   },
   urls: {
-    registry: 'https://raw.githubusercontent.com/h5p/h5p-registry/main/libraries.json',
+    registry: 'https://raw.githubusercontent.com/hoangbinh/h5p-registry/main/libraries.json',
     library: {
       language: 'https://raw.githubusercontent.com/{org}/{dep}/{version}/language/en.json',
       semantics: 'https://raw.githubusercontent.com/{org}/{dep}/{version}/semantics.json',
@@ -29,6 +29,8 @@ module.exports = {
     }
   },
   core: {
+    org: 'hoangbinh',
+    branch: 'master',
     clone: ['h5p-editor-php-library', 'h5p-php-library'],
     setup: ['h5p-math-display']
   },
