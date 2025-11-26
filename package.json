@@ -15,7 +15,7 @@
     "h5p": "./h5p.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
+    "express": "^4.19.2",
     "express-session": "^1.17.3",
     "adm-zip": "0.5.16",
     "archiver": "^5.3.1",
