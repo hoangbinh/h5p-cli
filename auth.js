@@ -12,7 +12,7 @@ module.exports = function (app) {
         resave: false,
         saveUninitialized: true,
         cookie: {
-            maxAge: 2 * 60 * 60 * 1000
+            maxAge: 24 * 60 * 60 * 1000
         }
     }));
     
