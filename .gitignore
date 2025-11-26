@@ -6,3 +6,4 @@ h5p-cli.service
 /temp/*
 /uploads/*
 /content/*
+/cache/*
