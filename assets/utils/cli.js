@@ -6,6 +6,7 @@ const init = require('./commands/init');
 const checkTranslations = require ('./commands/check-translations');
 const buildLibraries = require('./commands/build-libraries');
 const validate = require('./commands/validate');
+const bump = require('./commands/bump');
 const Input = require('./utility/input');
 
 var lf = '\u000A';
@@ -481,6 +482,7 @@ var commands = [
     shortDescription: 'Packs the given libraries',
     description:
       'Use -r for recursive packaging, will pack all dependencies as well' + lf +
+      'Use -f to skip library validation' + lf +
       lf +
       'You can change the default output package by setting:' + lf +
       'export H5P_DEFAULT_PACK="~/my-libraries.h5p"' + lf +
@@ -494,7 +496,23 @@ var commands = [
       'export H5P_ALLOWED_FILE_MODIFIERS=""' + lf +
       lf +
       'Put these in your ~/.bashrc for permanent settings.',
-    handler: pack
+    handler: async (...inputList) => {
+      try {
+        const input = new Input(inputList);
+        if (!input.hasFlag('-f')) {
+          const result = await validate.apply(null, inputList);
+          const notValid = result.some((item) => item.status !== 'ok');
+          if (notValid) {
+            console.log('validation failed; use \'-f\' to skip validation');
+            return;
+          }
+        }
+        pack.apply(null, inputList);
+      }
+      catch (error) {
+        console.log(error.message);
+      }
+    }
   },
   {
     name: 'increase-patch-version',
@@ -722,7 +740,15 @@ var commands = [
     shortDescription: 'Check that translations matches nb language',
     description: 'Checks that all languages and libraries provided have been correctly' +
     ' translated. When diff flag is supplied shows the differences between the translations',
-    handler: checkTranslations
+    handler: async (...inputList) => {
+      try {
+        await checkTranslations.apply(null, inputList);
+        process.exit(0);
+      }
+      catch (error) {
+        process.exit(1);
+      }
+    }
   },
   {
     name: 'build',
@@ -752,7 +778,23 @@ var commands = [
     syntax: '<library> [<library>]',
     shortDescription: 'Validate H5P libraries',
     description: 'Validate H5P is according to the specification',
-    handler: validate
+    handler: async (...inputList) => {
+      const result = await validate.apply(null, inputList);
+      const notValid = result.some((item) => item.status !== 'ok');
+      if (notValid) {
+        process.exit(1);
+      }
+      else {
+        process.exit(0);
+      }
+    }
+  },
+  {
+    name: 'bump',
+    syntax: '[<library>] [-y|--yes]',
+    shortDescription: 'Bump version of specified library or current library',
+    description: 'Bumps the patch version of the specified library (or current working directory if none specified). Stages and commits the updated version interactively by default. You can optionally create a tag and push the changes. Use the -y or --yes flag to skip all prompts and assume "yes" for tag and push automatically.',
+    handler: bump
   }
 ];
 

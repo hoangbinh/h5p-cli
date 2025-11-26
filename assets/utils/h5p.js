@@ -8,6 +8,7 @@ var archiver = require('archiver');
 var outputWriter = require('./utility/output');
 const h5pIgnoreParser = require('./utility/h5p-ignore-parser');
 const repository = require('./utility/repository');
+const languageCodes = require('./utility/language-codes');
 
 /**
  * No options specified.
@@ -926,20 +927,18 @@ function archiveDir(archive, path, alias) {
  *
  * @param {String} field A field
  * @param {String} name Name of field
+ * @param {String} parent Parent object
+ * @param {String} parentName Property name of parent object
  */
-function removeUntranslatables(field, name, parent) {
-
-
+function removeUntranslatables(field, name, parent, parentName) {
   if(field instanceof Array) {
     const fieldParent = JSON.parse(JSON.stringify(field));
     for (var i = field.length; i >= 0; i--) {
-      field[i] = removeUntranslatables(field[i], undefined, fieldParent);
-
+      field[i] = removeUntranslatables(field[i], undefined, fieldParent, name);
       if (field[i] === undefined) {
         field.splice(i, 1);
       }
     }
-
     if (field.length === 0) {
       field = undefined;
     }
@@ -947,21 +946,42 @@ function removeUntranslatables(field, name, parent) {
   else if (typeof field === 'object') {
     const fieldParent = JSON.parse(JSON.stringify(field));
     for(var property in field) {
-      field[property] = removeUntranslatables(field[property], property, fieldParent);
-
+      field[property] = removeUntranslatables(field[property], property, fieldParent, name);
       if(field[property] === undefined) {
         delete field[property];
       }
     }
-
-    if (field !== null && (typeof parent === 'object') && Object.keys(field).length === 0) {
+    
+    // remove empty objects if not under 'fields' parentName
+    if (field !== null && parentName !== 'fields' && Object.keys(field).length === 0) {
       field = undefined;
+    }
+    
+    // Remove unnecessary nested 'field' structures with only empty objects
+    const hasOnlyFields = field?.fields && Array.isArray(field.fields);
+    if (hasOnlyFields && field.fields.every(subField => {
+      return typeof subField === 'object' && Object.keys(subField).length === 0;
+    })) {
+      // Remove just the empty 'fields', let the rest be
+      if (Object.keys(field).length !== 1) {
+        delete field.fields;
+      }
+      else {
+        field = undefined;
+      }
+    }
+
+    // Remove 'default' attribute if 'options' is present
+    if (field?.options && field.default) {
+      delete field.default;
     }
   }
   else if (name === undefined || itemUntranslatable(name, field, parent)) {
     field = undefined;
   }
-
+  if (field === null) {
+    field = undefined;
+  }
   return field;
 }
 
@@ -974,41 +994,55 @@ function removeUntranslatables(field, name, parent) {
 function itemUntranslatable(property, value, parent) {
   switch (property) {
     case 'label':
-      return false;
-      break
-    case 'description':
-      return false;
-      break;
     case 'entity':
-      return false;
-      break;
     case 'explanation':
+    case 'example':
       return false;
-      break;
+    
+    case 'description':
     case 'placeholder':
-      return false;
-      break;
+      return value.trim().length === 0;
+    
     case 'default':
-
-      if (parent.type === 'select' || parent.widget === 'colorSelector') {
+      if (typeof value !== 'string') {
         return true;
       }
-
-      switch (typeof(value)) {
-        case 'number':
-          return true;
-          break;
-        case 'boolean':
-          return true;
-          break;
-        default:
-          return false;
-          break;
+      // Remove empty strings. One example is Dictation, which has a space for 
+      // a word separator setting.
+      if (value.trim().length === 0) {
+        return true;
+      }
+      // If this is a number, don't include it
+      if (!isNaN(value)) {
+        return true;
+      }
+      if (!value.replaceAll(new RegExp(/<\/?[a-z][^>]*>/ig), '')) { // empty html tags
+        return true;
+      }
+      
+      if (
+        // 3 digit hex color codes
+        new RegExp(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/).test(value) === true ||
+        // 4 digit hex color codes incl. alpha channel
+        new RegExp(/^#([A-Fa-f0-9]{8}|[A-Fa-f0-9]{4})$/).test(value) === true ||
+        // rgb(a) color codes, sloppy check
+        new RegExp(/^rgb(a)?(\()?[\d\s,\.\/%]+(\))?$/).test(value) === true ||
+        // hsl(a) color codes, sloppy check
+        new RegExp(/^hsl(a)?(\()?[\d\s,\.\/%]+(\))?$/).test(value) === true ||
+        // hwb color codes, sloppy check
+        new RegExp(/^hsv?(\()?[\d\s,\.\/%]+(\))?$/).test(value) === true ||
+        // hwb color codes, sloppy check
+        new RegExp(/^hwb\([\w\d\s,\.\/%]+\)$/).test(value) === true
+        // Ignoring lab, oklab, lch, oklch, color() and other color spaces
+      ) { // color codes
+        return true;
+      }
+      if (languageCodes.indexOf(value) !== -1) { // language codes
+        return true;
       }
       break
     default:
       return true;
-      break;
   }
 }
 
@@ -1407,6 +1441,10 @@ h5p.findDirectories = function (skipCheck, path) {
 
           processed++;
           if (processed === files.length) {
+            if (repos.length === 0) {
+              reject(new Error('input dirs are not git repos (you can use the \'-f\' flag to skip this check)'));
+              return;
+            }
             resolve(repos);
           }
         });
@@ -1704,9 +1742,19 @@ h5p.createLanguageFile = function (repo, languageCode, next) {
     fs.writeFileSync(languageFile, JSON.stringify({
       semantics: removeUntranslatables(semantics)
     }, null, 2));
-
     next(languageFile + ' created');
   });
+};
+
+/**
+ * Create default language object for a given repo
+ *
+ * @public
+ * @namespace h5p
+ */
+h5p.createDefaultLanguage = function (libraryDir) {
+  const file = `${libraryDir}/semantics.json`;
+  return fs.existsSync(file) ? removeUntranslatables(JSON.parse(fs.readFileSync(file))) : {};
 };
 
 /**

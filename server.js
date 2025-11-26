@@ -1,5 +1,5 @@
 const express = require('express');
-const config = require('./config.js');
+const config = require('./configLoader.js');
 const multer = require('multer')({ dest: `./${config.folders.temp}` });
 const api = require('./api.js');
 let app = express();
@@ -41,12 +41,18 @@ app.post('/edit/:library/:folder/files', multer.single('file'), api.uploadFile);
 app.post('/edit/:library/:folder', multer.none(), api.saveContent);
 app.get('/content-user-data/:folder/:type/:id', api.getUserData);
 app.post('/content-user-data/:folder/:type/:id', api.setUserData);
+app.delete('/content-user-data/:folder', api.resetUserData);
 app.use(`/${config.folders.assets}`, express.static(`${require.main.path}/${config.folders.assets}`))
 app.use(express.static('./'));
-app.listen(config.port, () => {
-  console.log(`h5p content type development server running on port ${config.port}`);
+
+let port = config.port;
+app.listen(port, () => {
+  console.log(`h5p content type development server running on http://localhost:${port}/dashboard`);
 });
+
 if (config.files.watch) {
-  const eye = require('livereload').createServer();
+  const eye = require('livereload').createServer({
+    exclusions: config?.files?.watchExclusions ?? []
+  });
   eye.watch(config.folders.libraries);
 }

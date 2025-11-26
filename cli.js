@@ -1,7 +1,7 @@
 const { execSync } = require("child_process");
 const fs = require('fs');
 const logic = require('./logic.js');
-const config = require('./config.js');
+const config = require('./configLoader.js');
 const utils = require('./assets/utils/cli.js');
 let marked = require('marked');
 const markedTerminal = require('marked-terminal');
@@ -14,11 +14,21 @@ marked = marked.marked;
 if (process.env.H5P_SSH_CLONE) {
   config.urls.library.clone = config.urls.library.sshClone;
 }
+const handleMissingOptionals = (missingOptionals, result, item) => {
+  if (result[item].optional) {
+    if (!missingOptionals[item]) {
+      missingOptionals[item] = result[item];
+    }
+  }
+  else {
+    throw new Error(`unregistered ${item} library required by ${result[item].parent}`);
+  }
+}
 const cli = {
   // exports content type as .h5p zipped file
-  export: (library, folder) => {
+  export: async (library, folder) => {
     try {
-      const file = logic.export(library, folder);
+      const file = await logic.export(library, folder);
       console.log(file);
     }
     catch (error) {
@@ -38,10 +48,10 @@ const cli = {
     }
   },
   // lists h5p libraries
-  list: async (reversed, ignoreCache) => {
+  list: async (reversed, ignoreFile) => {
     try {
       console.log('> fetching h5p library registry');
-      const result = await logic.getRegistry(parseInt(ignoreCache));
+      const result = await logic.getRegistry(parseInt(ignoreFile));
       for (let item in result.regular) {
         console.log(`${parseInt(reversed) ? result.regular[item].id : item} (${result.regular[item].org})`);
       }
@@ -64,11 +74,11 @@ const cli = {
     }
   },
   // computes dependencies for h5p library
-  deps: async (library, mode, saveToCache, version, folder) => {
+  deps: async (library, mode, version, folder) => {
     try {
-      const result = await logic.computeDependencies(library, mode, parseInt(saveToCache), version, folder);
+      const result = await logic.computeDependencies(library, mode, version, folder);
       for (let item in result) {
-        console.log(result[item] ? item : `!!! unregistered ${item} library`);
+        console.log(result[item].id ? item : `!!! unregistered ${result[item].optional ? 'optional' : 'required'} ${item} library`);
       }
     }
     catch (error) {
@@ -79,36 +89,35 @@ const cli = {
   // computes missing dependencies for h5p library
   missing: async (library) => {
     try {
-      const missing = [];
-      let result = await logic.computeDependencies(library, 'view');
-      for (let item in result) {
-        if (!result[item]) {
-          if (missing.indexOf(item) == -1) {
-            missing.push(item);
-          }
+      const libraryDirs = await logic.parseLibraryFolders();
+      const registry = await logic.getRegistry();
+      const missing = {}; // list of missing dependencies (key) with true for optional & false for required (value)
+      const parseMissing = (result, item) => {
+        if (!registry.regular[item] && (typeof missing[item] === 'undefined' || missing[item])) {
+          missing[item] = result[item].optional;
         }
-        else {
-          const list = await logic.computeDependencies(item, 'edit');
+      }
+      let result = await logic.computeDependencies(library, 'view', null, libraryDirs[registry.regular[library].id]);
+      for (let item in result) {
+        parseMissing(result, item);
+        if (registry.regular[item]) {
+          const list = await logic.computeDependencies(item, 'edit', null, libraryDirs[registry.regular[item].id]);
           for (let elem in list) {
-            if (!list[elem] && missing.indexOf(elem) == -1) {
-              missing.push(elem);
-            }
+            parseMissing(list, elem);
           }
         }
       }
-      result = await logic.computeDependencies(library, 'edit');
+      result = await logic.computeDependencies(library, 'edit', null, libraryDirs[registry.regular[library].id]);
       for (let item in result) {
-        if (!result[item] && missing.indexOf(item) == -1) {
-          missing.push(item);
-        }
+        parseMissing(result, item);
       }
-      if (!missing.length) {
+      if (!Object.keys(missing).length) {
         console.log(`> ${library} has no unregistered dependencies`);
         return;
       }
       console.log(`> unregistered dependencies for ${library}`);
-      for (let item of missing) {
-        console.log(item);
+      for (let item in missing) {
+        console.log(`${item} (${missing[item] ? 'optional' : 'required'})`);
       }
     }
     catch (error) {
@@ -117,10 +126,10 @@ const cli = {
     }
   },
   // installs dependencies for h5p library
-  install: async (library, mode, useCache) => {
+  install: async (library, mode) => {
     try {
       console.log(`> downloading ${library} library and dependencies into "${config.folders.libraries}" folder`);
-      await logic.getWithDependencies('download', library, mode, parseInt(useCache));
+      await logic.getWithDependencies('download', library, mode);
       console.log(`> done installing ${library}`);
     }
     catch (error) {
@@ -128,11 +137,11 @@ const cli = {
       console.log(error);
     }
   },
-  // clones dependencies for h5p library based on cache entries
-  clone: async (library, mode, useCache) => {
+  // clones dependencies for h5p library
+  clone: async (library, mode) => {
     try {
       console.log(`> cloning ${library} library and dependencies into "${config.folders.libraries}" folder`);
-      await logic.getWithDependencies('clone', library, mode, parseInt(useCache));
+      await logic.getWithDependencies('clone', library, mode);
       console.log(`> done installing ${library}`);
     }
     catch (error) {
@@ -166,6 +175,7 @@ const cli = {
   setup: async function(library, version, download) {
     const isUrl = ['http', 'git@'].includes(library.slice(0, 4)) ? true : false;
     const url = library;
+    const missingOptionals = {};
     try {
       if (isUrl) {
         const entry = await this.register(url);
@@ -174,26 +184,84 @@ const cli = {
       let toSkip = [];
       const action = parseInt(download) ? 'download' : 'clone';
       const latest = version ? false : true;
-      let result = await logic.computeDependencies(library, 'view', 1, version);
+      let result = await logic.computeDependencies(library, 'view', version);
       for (let item in result) {
-        if (!result[item]) {
-          throw new Error(`unregistered ${item} library`);
-        }
         // setup editor dependencies for every view dependency
-        toSkip = await logic.getWithDependencies(action, item, 'edit', 1, latest, toSkip);
+        if (!result[item].id) {
+          handleMissingOptionals(missingOptionals, result, item);
+        }
+        else {
+          toSkip = await logic.getWithDependencies(action, item, 'edit', latest, toSkip);
+        }
       }
-      result = await logic.computeDependencies(library, 'edit', 1, version);
+      result = await logic.computeDependencies(library, 'edit', version);
       for (let item in result) {
-        if (!result[item]) {
-          throw new Error(`unregistered ${item} library`);
+        if (!result[item].id) {
+          handleMissingOptionals(missingOptionals, result, item);
         }
       }
       toSkip = [];
       console.log(`> ${action} ${library} library "view" dependencies into "${config.folders.libraries}" folder`);
-      toSkip = await logic.getWithDependencies(action, library, 'view', 1, latest, toSkip);
+      toSkip = await logic.getWithDependencies(action, library, 'view', latest, toSkip);
       console.log(`> ${action} ${library} library "edit" dependencies into "${config.folders.libraries}" folder`);
-      toSkip = await logic.getWithDependencies(action, library, 'edit', 1, latest, toSkip);
+      toSkip = await logic.getWithDependencies(action, library, 'edit', latest, toSkip);
+      if (Object.keys(missingOptionals).length) {
+        console.log('!!! missing optional libraries');
+        for (let item in missingOptionals) {
+          console.log(`${item} (${missingOptionals[item].optional ? 'optional' : 'required'}) required by ${missingOptionals[item].parent}`);
+        }
+      }
       console.log(`> done setting up ${library}`);
+    }
+    catch (error) {
+      console.log('> error');
+      console.log(error);
+    }
+  },
+  // clone library branches in corresponding @branch folders
+  '@branches': (input) => {
+    try {
+      console.log(execSync('git checkout .').toString());
+      execSync('rm -rdf @*');
+      const initialBranch = execSync('git rev-parse --abbrev-ref HEAD').toString();
+      const branches = process.argv.slice(3);
+      for (let branch of branches) {
+        const target = `@${branch.replace('/', '_')}`;
+        const tmpTarget = `/tmp/h5p-cli-${target}`;
+        execSync(`git checkout ${branch}`);
+        fs.rmSync(tmpTarget, { recursive: true, force: true });
+        execSync(`cp -r . ${tmpTarget}`);
+      }
+      execSync(`git checkout ${initialBranch}`);
+      const libraryJson = JSON.parse(fs.readFileSync('library.json'));
+      for (let branch of branches) {
+        const target = `@${branch.replace('/', '_')}`;
+        const tmpTarget = `/tmp/h5p-cli-${target}`;
+        execSync(`cp -r ${tmpTarget} ${target}`);
+        fs.rmSync(tmpTarget, { recursive: true, force: true });
+        const targetLibraryJson = JSON.parse(fs.readFileSync(`${target}/library.json`));
+        for (let item of targetLibraryJson.preloadedJs) {
+          item.path = `${target}/${item.path}`;
+          libraryJson.preloadedJs.push(item);
+        }
+        for (let item of targetLibraryJson.preloadedCss) {
+          item.path = `${target}/${item.path}`;
+          libraryJson.preloadedCss.push(item);
+        }
+        const packageFile = `${target}/package.json`;
+        if (!fs.existsSync(packageFile)) {
+          continue;
+        }
+        const info = JSON.parse(fs.readFileSync(packageFile));
+        if (!info?.scripts?.build) {
+          continue;
+        }
+        console.log(`>>> npm install --ignore-scripts ${target}`);
+        console.log(execSync('npm install --ignore-scripts', {cwd: target}).toString());
+        console.log(`>>> npm run build ${target}`);
+        console.log(execSync('npm run build', {cwd: target}).toString());
+      }
+      fs.writeFileSync('library.json', JSON.stringify(libraryJson, null, 2));
     }
     catch (error) {
       console.log('> error');
@@ -202,71 +270,15 @@ const cli = {
   },
   // updates local library registry entry
   register: async (input) => {
-    const isUrl = ['http', 'git@'].includes(input.slice(0, 4)) ? true : false;
     try {
+      const isUrl = ['http', 'git@'].includes(input.slice(0, 4)) ? true : false;
       let registry = await logic.getRegistry();
       const entry = isUrl ? await logic.registryEntryFromRepoUrl(input) : JSON.parse(fs.readFileSync(input, 'utf-8'));
       registry.reversed = {...registry.reversed, ...entry};
-      fs.writeFileSync(`${config.folders.cache}/${config.registry}`, JSON.stringify(registry.reversed));
+      fs.writeFileSync(config.registry, JSON.stringify(registry.reversed));
       console.log('> updated registry entry');
       console.log(entry);
       return entry;
-    }
-    catch (error) {
-      console.log('> error');
-      console.log(error);
-    }
-  },
-  // generates cache entries for library based on local files; does not use git repos
-  use: async (library, folder) => {
-    try {
-      let registry = await logic.getRegistry();
-      const target = `${config.folders.libraries}/${folder}`;
-      if (!registry.regular[library]) {
-        console.log(`registering ${library} library`);
-        const lib = JSON.parse(fs.readFileSync(`${target}/library.json`, 'utf-8'));
-        const repoName = logic.machineToShort(lib.machineName);
-        if (library != repoName) {
-          throw new Error(`provided "${library}" differs from computed "${repoName}"`);
-        }
-        const entry = {};
-        entry[lib.machineName] = {
-          id: lib.machineName,
-          title: lib.title,
-          author: lib.author,
-          runnable: lib.runnable,
-          repoName
-        }
-        registry.reversed = {...registry.reversed, ...entry};
-        fs.writeFileSync(`${config.folders.cache}/${config.registry}`, JSON.stringify(registry.reversed));
-      }
-      let result = await logic.computeDependencies(library, 'view', 1, null, folder);
-      for (let item in result) {
-        if (!result[item]) {
-          throw new Error(`unregistered ${item} library`);
-        }
-        console.log(item);
-      }
-      result = await logic.computeDependencies(library, 'edit', 1, null, folder);
-      for (let item in result) {
-        if (!result[item]) {
-          throw new Error(`unregistered ${item} library`);
-        }
-        console.log(item);
-      }
-      const packageFile = `${target}/package.json`;
-      if (!fs.existsSync(packageFile)) {
-        return;
-      }
-      const info = JSON.parse(fs.readFileSync(packageFile));
-      if (!info?.scripts?.build) {
-        return;
-      }
-      console.log('>>> npm install');
-      console.log(execSync('npm install', {cwd: target}).toString());
-      console.log('>>> npm run build');
-      console.log(execSync('npm run build', {cwd: target}).toString());
-      fs.rmSync(`${target}/node_modules`, { recursive: true, force: true });
     }
     catch (error) {
       console.log('> error');
@@ -291,7 +303,7 @@ const cli = {
   // help section
   help: (command) => {
     try {
-      const help = fs.readFileSync(`${require.main.path}/commands.md`, 'utf-8');
+      const help = fs.readFileSync(`${require.main.path}/assets/docs/commands.md`, 'utf-8');
       if (command) {
         const regexp = ` \`h5p ${command}(.*?)(\\n\\n|\\Z)`;
         const data = help.match(new RegExp(regexp, 's'))?.[0];

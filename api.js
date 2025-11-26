@@ -1,15 +1,11 @@
 const fs = require('fs');
+const path = require('path');
 const he = require('he');
 const imageSize = require('image-size');
 const logic = require('./logic.js');
-const config = require('./config.js');
+const config = require('./configLoader.js');
 const l10n = require('./assets/l10n.json');
 const supportedLanguages = require(`${require.main.path}/${config.folders.assets}/languageCatcher.js`);
-let cache = {
-  registry: null,
-  view: {},
-  edit: {}
-};
 let session = {
   name: 'main-session',
   language: 'en',
@@ -44,7 +40,7 @@ module.exports = {
       }
       let input = {
         assets: config.folders.assets,
-        host: config.baseUrl ? config.baseUrl : `${request.protocol}://${request.get('host')}`,
+        api: config.api,
         status: session.status,
         language: session.language,
         languages: JSON.stringify(languages),
@@ -62,14 +58,13 @@ module.exports = {
   // lists runnable libraries
   contentTypes: async (request, response, next) => {
     try {
-      if (!cache.registry) {
-        cache.registry = await logic.getRegistry();
-      }
-      if (!cache.registry.runnable) {
-        cache.registry.runnable = {};
+      const registry = await logic.getRegistry();
+      const libraryDirs = await logic.parseLibraryFolders();
+      if (!registry.runnable) {
+        registry.runnable = {};
         const list = [];
-        for (let item in cache.registry.regular) {
-          if (cache.registry.regular[item].runnable) {
+        for (let item in registry.regular) {
+          if (registry.regular[item].runnable && libraryDirs[registry.regular[item].id]) {
             list.push(item);
           }
         }
@@ -85,11 +80,11 @@ module.exports = {
           return 0;
         });
         for (let item of list) {
-          cache.registry.runnable[item] = cache.registry.regular[item];
+          registry.runnable[item] = registry.regular[item];
         }
       }
       response.set('Content-Type', 'application/json');
-      response.end(JSON.stringify(cache.registry.runnable));
+      response.end(JSON.stringify(registry.runnable));
     }
     catch (error) {
       handleError(error, response);
@@ -114,6 +109,23 @@ module.exports = {
       fs.writeFileSync(dataFile, JSON.stringify(data));
       response.set('Content-Type', 'application/json');
       response.end(JSON.stringify({success: true}));
+    }
+    catch (error) {
+      handleError(error, response);
+    }
+  },
+  // deletes the session file used for resume functionality
+  resetUserData: (request, response, next) => {
+    try {
+      const dataFile = `content/${request.params.folder}/sessions/${session.name}.json`;
+      response.set('Content-Type', 'application/json');
+      if (fs.existsSync(dataFile)) {
+        fs.unlinkSync(dataFile);
+        response.end(JSON.stringify({success: true}));
+      }
+      else {
+        response.end(JSON.stringify({success: true, message: 'no_file'}));
+      }
     }
     catch (error) {
       handleError(error, response);
@@ -152,9 +164,9 @@ module.exports = {
     }
   },
   // download zipped archive of content type
-  export: (request, response, next) => {
+  export: async (request, response, next) => {
     try {
-      const file = logic.export(request.params.library, request.params.folder);
+      const file = await logic.export(request.params.library, request.params.folder);
       response.download(file);
     }
     catch (error) {
@@ -167,24 +179,12 @@ module.exports = {
       request.params.folder = request.params.folder.replaceAll(/[^a-zA-Z0-9 -]/g, '');
       request.params.folder = request.params.folder.replaceAll(' ', '-');
       const target = `content/${request.params.folder}`;
-      const viewDepsFile = `${config.folders.cache}/${request.params.type}.json`;
-      const editDepsFile = `${config.folders.cache}/${request.params.type}_edit.json`;
-      if (!fs.existsSync(viewDepsFile) || !fs.existsSync(editDepsFile)) {
-        response.set('Content-Type', 'application/json');
-        response.end(JSON.stringify({
-          error: `"${request.params.type}" library not cached; please run "h5p setup ${request.params.type}".`
-        }));
-        return;
-      }
       if (fs.existsSync(target)) {
         response.set('Content-Type', 'application/json');
         response.end(JSON.stringify({
           error: `"${target}" folder already exists`
         }));
         return;
-      }
-      if (!cache.registry) {
-        cache.registry = await logic.getRegistry();
       }
       fs.mkdirSync(target);
       logic.generateInfo(request.params.folder, request.params.type);
@@ -215,13 +215,12 @@ module.exports = {
   // lists content folders
   projects: async (request, response, next) => {
     try {
-      if (!cache.registry) {
-        cache.registry = await logic.getRegistry();
-      }
+      const registry = await logic.getRegistry();
       const limit = parseInt(request.query.limit) || 10;
       const page = parseInt(request.query.page) || 0;
       const start = page * limit;
       const end = start + limit;
+      const libraryDirs = await logic.parseLibraryFolders();
       const output = {
         list: [],
         total: 0
@@ -233,7 +232,7 @@ module.exports = {
           continue;
         }
         const info = JSON.parse(fs.readFileSync(`content/${item}/h5p.json`, 'utf-8'));
-        if (!cache.registry.reversed[info.mainLibrary]) {
+        if (!registry.reversed[info.mainLibrary]) {
           continue;
         }
         list.push({
@@ -255,15 +254,12 @@ module.exports = {
       });
       output.total = list.length;
       for (let i = start; i < Math.min(end, list.length); i++) {
-        let entry = cache.registry.reversed?.[list[i].id];
+        let entry = registry.reversed?.[list[i].id];
         const library = entry.shortName;
-        const cacheFile = `${config.folders.cache}/${library}.json`;
-        if (fs.existsSync(cacheFile)) {
-          entry = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'))[library];
-        }
+        entry = (await logic.computeDependencies(library, 'view', null, libraryDirs[registry.regular[library].id]))[library];
         let icon = '/assets/icon.svg';
         if (entry.version) {
-          const libraryFolder = `${config.folders.libraries}/${list[i].id}-${entry.version.major}.${entry.version.minor}`;
+          const libraryFolder = `${config.folders.libraries}/${libraryDirs[list[i].id]}`;
           const iconFile = `${libraryFolder}/icon.svg`;
           if (fs.existsSync(libraryFolder)) {
             if (fs.existsSync(iconFile)) {
@@ -306,7 +302,7 @@ module.exports = {
       response.end(logic.fromTemplate(splitView_html, input));
     }
     catch (error) {
-     handleError(error, response); 
+     handleError(error, response);
     }
   },
   // editor file upload
@@ -317,7 +313,17 @@ module.exports = {
       if (!fs.existsSync(targetFolder)) {
         fs.mkdirSync(targetFolder);
       }
-      const ext = request.file.originalname.split('.')?.[1] || '';
+
+      const ext =
+        (request.file.originalname.split('.')?.pop() || '').toLowerCase();
+
+      const valid =
+        validateFileForUpload(form.type, request.file.mimetype, ext);
+
+      if (valid !== 'OK') {
+        throw new Error(valid);
+      }
+
       const path = `${form.type}s/${request.file.filename}.${ext}`;
       const targetFile = `${targetFolder}/${request.file.filename}.${ext}`;
       fs.renameSync(`${request.file.path}`, targetFile);
@@ -343,7 +349,9 @@ module.exports = {
   saveContent: (request, response, next) => {
     try {
       const input = JSON.parse(request.body.parameters);
-      fs.writeFileSync(`content/${request.params.folder}/content.json`, JSON.stringify(input.params));
+      const currentParams = fs.readFileSync(`content/${request.params.folder}/content.json`, 'utf-8');
+      const newParams = JSON.stringify(input.params);
+      fs.writeFileSync(`content/${request.params.folder}/content.json`, newParams);
       const infoFile = `content/${request.params.folder}/h5p.json`;
       let info = JSON.parse(fs.readFileSync(infoFile, 'utf-8'));
       info = {...info, ...input.metadata};
@@ -373,6 +381,9 @@ module.exports = {
         }
       }
       const simple = request.query.simple;
+      if (currentParams !== '{}' && currentParams !== newParams) {
+        resetContentUserData(request.params.folder); // content changed; reset user data
+      }
       response.redirect(`/${simple ? 'edit' : 'view'}/${request.params.library}/${request.params.folder}${simple ? '?simple=1' : ''}`);
     }
     catch (error) {
@@ -383,24 +394,16 @@ module.exports = {
   ajaxTranslations: async (request, response, next) => {
     try {
       const library = request.params.library;
-      const cacheFile = `${config.folders.cache}/${library}.json`;
-      if (!cache?.view[library]) {
-        if (fs.existsSync(cacheFile)) {
-          cache.view[library] = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
-        }
-        else {
-          cache.view[library] = await logic.computeDependencies(library, 'view', true);
-        }
-      }
-      if (!cache.registry) {
-        cache.registry = await logic.getRegistry();
-      }
+      const registry = await logic.getRegistry();
+      const libraryDirs = await logic.parseLibraryFolders();
+      const libFolder = libraryDirs[registry.regular[library].id];
+      const libs = await logic.computeDependencies(library, 'view', null, libFolder);
       const translations = {};
       for (let item of request.body.libraries) {
-        const entry = cache.view[library][cache.registry.reversed[item.split(' ')[0]].shortName];
-        const label = `${entry.id}-${entry.version.major}.${entry.version.minor}`;
+        const entry = libs[registry.reversed[item.split(' ')[0]].shortName];
+        const folder = libraryDirs[entry.id];
         const idx = `${entry.id} ${entry.version.major}.${entry.version.minor}`;
-        const languageFolder = `${config.folders.libraries}/${label}/language`;
+        const languageFolder = `${config.folders.libraries}/${folder}/language`;
         const langFile = `${languageFolder}/${request.query.language}.json`;
         if (fs.existsSync(langFile)) {
           translations[idx] = fs.readFileSync(langFile, 'utf-8');
@@ -416,61 +419,11 @@ module.exports = {
   // endpoint that lists library data; used as ajax request by the content type editors;
   ajaxLibraries: async (request, response, next) => {
     try {
-      const baseUrl = config.baseUrl ? config.baseUrl : `${request.protocol}://${request.get('host')}`;
-      const registry = await logic.getRegistry();
-      let libraries = [request.params.library];
-      if (Array.isArray(request.body.libraries)) {
-        libraries = [];
-        for (let item of request.body.libraries) {
-          item = item.split(' ')[0];
-          libraries.push(registry.reversed[item].shortName);
-        }
-      }
-      if (request.query.machineName) {
-        libraries = [];
-        libraries.push(registry.reversed[request.query.machineName].shortName);
-      }
-      const toDo = [];
-      for (let item of libraries) {
-        toDo.push(computePreloaded(item, baseUrl));
-      }
-      const preloaded = await Promise.all(toDo);
-      let output;
-      if (request.query.machineName) {
-        const library = libraries[0];
-        const version = cache.edit[library][library].version;
-        const label = `${cache.edit[library][library].id}-${version.major}.${version.minor}`;
-        output = {
-          name: cache.edit[library][library].id,
-          version,
-          title: cache.edit[library][library].title,
-          upgradesScript: `${baseUrl}/${config.folders.libraries}/${label}/upgrades.js`,
-          semantics: JSON.parse(fs.readFileSync(`${config.folders.libraries}/${label}/semantics.json`, 'utf-8')),
-          language: null,
-          defaultLanguage: null,
-          languages: preloaded[0].languages,
-          javascript: preloaded[0].preloadedJs,
-          css: preloaded[0].preloadedCss,
-          translations: preloaded[0].translations,
-          directories: preloaded[0].directories
-        }
-      }
-      else {
-        output = [];
-        for (let item of preloaded) {
-          const library = item.library;
-          output.push({
-            uberName: `${cache.edit[library][library].id} ${cache.edit[library][library].version.major}.${cache.edit[library][library].version.minor}`,
-            name: cache.edit[library][library].id,
-            majorVersion: cache.edit[library][library].version.major,
-            minorVersion: cache.edit[library][library].version.minor,
-            title: cache.edit[library][library].title,
-            runnable: cache.edit[library][library].runnable,
-            restricted: false,
-            metadataSettings: null
-          });
-        }
-      }
+      const output = await ajaxLibraries({
+        library: request.params.library,
+        libraries: request.body.libraries,
+        machineName: request.query.machineName
+      });
       response.set('Content-Type', 'application/json');
       response.end(JSON.stringify(output));
     }
@@ -481,41 +434,41 @@ module.exports = {
   // html page that initializes and renders h5p content type editors
   edit: async (request, response, next) => {
     try {
-      const baseUrl = config.baseUrl ? config.baseUrl : `${request.protocol}://${request.get('host')}`;
+      const baseUrl = config.api;
       const library = request.params.library;
       const folder = request.params.folder;
+      const registry = await logic.getRegistry();
+      const libraryDirs = await logic.parseLibraryFolders();
       if (!await verifySetup(library, response)) {
         return;
       }
       const metadataSemantics = fs.readFileSync(`${require.main.path}/${config.folders.assets}/metadataSemantics.json`, 'utf-8');
       const copyrightSemantics = fs.readFileSync(`${require.main.path}/${config.folders.assets}/copyrightSemantics.json`, 'utf-8');
-      const cacheFile = `${config.folders.cache}/${library}_edit.json`;
-      if (!cache?.edit[library]) {
-        if (fs.existsSync(cacheFile)) {
-          cache.edit[library] = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
-        }
-        else {
-          cache.edit[library] = await logic.computeDependencies(library, 'edit', true);
-        }
-      }
+      const libs = await logic.computeDependencies(library, 'edit', null, libraryDirs[registry.regular[library].id]);
       const jsonContent = fs.readFileSync(`./content/${folder}/content.json`, 'utf8');
       let preloadedJs = [];
       let preloadedCss = [];
-      for (let item in cache.edit[library]) {
+      for (let item in libs) {
         if (item == library) {
           continue;
         }
-        const entry = cache.edit[library][item];
-        const label = `${entry.id}-${entry.version.major}.${entry.version.minor}`;
+        const entry = libs[item];
+        if (!entry.id) {
+          continue;
+        }
+        const libFolder = libraryDirs[entry.id];
+        if (!libFolder) {
+          continue;
+        }
         for (let jsItem of entry.preloadedJs) {
-          preloadedJs.push(`"/${config.folders.libraries}/${label}/${jsItem.path}"`);
+          preloadedJs.push(`"/${config.folders.libraries}/${libFolder}/${jsItem.path}"`);
         }
         for (let cssItem of entry.preloadedCss) {
-          preloadedCss.push(`"/${config.folders.libraries}/${label}/${cssItem.path}"`);
+          preloadedCss.push(`"/${config.folders.libraries}/${libFolder}/${cssItem.path}"`);
         }
       }
-      const mathDisplay = JSON.parse(fs.readFileSync(`${config.folders.cache}/h5p-math-display.json`, 'utf-8'))['h5p-math-display'];
-      const mathDisplayLabel = `${mathDisplay.id}-${mathDisplay.version.major}.${mathDisplay.version.minor}`;
+      const mathDisplay = (await logic.computeDependencies('h5p-math-display', 'view', null, libraryDirs[registry.regular['h5p-math-display'].id]))['h5p-math-display'];
+      const mathDisplayLabel = libraryDirs[mathDisplay.id];
       preloadedJs.push(`"/${config.folders.libraries}/${mathDisplayLabel}/dist/h5p-math-display.js"`);
       const libraryConfig = JSON.parse(logic.fromTemplate(fs.readFileSync(`${require.main.path}/${config.folders.assets}/libraryConfig.json`, 'utf-8'), {
         baseUrl,
@@ -524,7 +477,7 @@ module.exports = {
       const html = fs.readFileSync(`${require.main.path}/${config.folders.assets}/templates/edit.html`, 'utf-8');
       const info = JSON.parse(fs.readFileSync(`content/${folder}/h5p.json`, 'utf-8'));
       info.language = session.language;
-      const id = cache.edit[library][library].id;
+      const id = libs[library].id;
       let mainLibrary = {};
       for (let item of info.preloadedDependencies) {
         if (item.machineName == id) {
@@ -541,6 +494,8 @@ module.exports = {
         metadata: info
       }
       const labels = await getLangLabels();
+      const machineName = `${libs[library].id} ${libs[library].version.major}.${libs[library].version.minor}`;
+      const libraryDirectories = JSON.stringify((await ajaxLibraries({ machineName: id })).directories);
       let input = {
         assets: config.folders.assets,
         libraries: config.folders.libraries,
@@ -554,10 +509,11 @@ module.exports = {
         preloadedCss: preloadedCss.join(',\n'),
         preloadedJs: preloadedJs.join(',\n'),
         l10n: JSON.stringify(l10n),
-        machineName: `${cache.edit[library][library].id} ${cache.edit[library][library].version.major}.${cache.edit[library][library].version.minor}`,
-        version: `${cache.edit[library][library].version.major}.${cache.edit[library][library].version.minor}`,
+        machineName,
+        version: `${libs[library].version.major}.${libs[library].version.minor}`,
         contentVersion: `${mainLibrary.majorVersion}.${mainLibrary.minorVersion}`,
-        id: cache.edit[library][library].id,
+        id,
+        libraryDirectories,
         parameters: he.encode(JSON.stringify(formParams)),
         libraryConfig: JSON.stringify(libraryConfig),
         language: session.language,
@@ -576,22 +532,16 @@ module.exports = {
   // html page that initializes and renders h5p content types
   view: async (request, response, next) => {
     try {
-      const baseUrl = config.baseUrl ? config.baseUrl : `${request.protocol}://${request.get('host')}`;
+      const baseUrl = config.api;
       const library = request.params.library;
       const folder = request.params.folder;
+      const registry = await logic.getRegistry();
+      const libraryDirs = await logic.parseLibraryFolders();
       if (!await verifySetup(library, response)) {
         return;
       }
-      logic.upgrade(folder, library);
-      const cacheFile = `${config.folders.cache}/${library}.json`;
-      if (!cache?.view[library]) {
-        if (fs.existsSync(cacheFile)) {
-          cache.view[library] = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
-        }
-        else {
-          cache.view[library] = await logic.computeDependencies(library, 'view', true);
-        }
-      }
+      await logic.upgrade(folder, library);
+      const libs = await logic.computeDependencies(library, 'view', null, libraryDirs[registry.regular[library].id]);
       const jsonContent = fs.readFileSync(`./content/${folder}/content.json`, 'utf8');
       const sessions = manageSession(request.params.folder, {
         language: request.query?.language,
@@ -603,18 +553,24 @@ module.exports = {
       metadata = JSON.stringify(metadata);
       let preloadedJs = [];
       let preloadedCss = [];
-      for (let item in cache.view[library]) {
-        const entry = cache.view[library][item];
-        const label = `${entry.id}-${entry.version.major}.${entry.version.minor}`;
+      for (let item in libs) {
+        const entry = libs[item];
+        if (!entry.id) {
+          continue;
+        }
+        const libFolder = libraryDirs[entry.id];
+        if (!libFolder) {
+          continue;
+        }
         for (let jsItem of entry.preloadedJs) {
-          preloadedJs.push(`/${config.folders.libraries}/${label}/${jsItem.path}`);
+          preloadedJs.push(`/${config.folders.libraries}/${libFolder}/${jsItem.path}`);
         }
         for (let cssItem of entry.preloadedCss) {
-          preloadedCss.push(`/${config.folders.libraries}/${label}/${cssItem.path}`);
+          preloadedCss.push(`/${config.folders.libraries}/${libFolder}/${cssItem.path}`);
         }
       }
-      const mathDisplay = JSON.parse(fs.readFileSync(`${config.folders.cache}/h5p-math-display.json`, 'utf-8'))['h5p-math-display'];
-      const mathDisplayLabel = `${mathDisplay.id}-${mathDisplay.version.major}.${mathDisplay.version.minor}`;
+      const mathDisplay = (await logic.computeDependencies('h5p-math-display', 'view', null, libraryDirs[registry.regular['h5p-math-display'].id]))['h5p-math-display'];
+      const mathDisplayLabel = libraryDirs[mathDisplay.id];
       preloadedJs.push(`/${config.folders.libraries}/${mathDisplayLabel}/dist/h5p-math-display.js`);
       const libraryConfig = JSON.parse(logic.fromTemplate(fs.readFileSync(`${require.main.path}/${config.folders.assets}/libraryConfig.json`, 'utf-8'), {
         baseUrl,
@@ -622,7 +578,7 @@ module.exports = {
       }));
       const html = fs.readFileSync(`${require.main.path}/${config.folders.assets}/templates/view.html`, 'utf-8');
       const info = JSON.parse(fs.readFileSync(`content/${folder}/h5p.json`, 'utf-8'));
-      const id = cache.view[library][library].id;
+      const id = libs[library].id;
       let mainLibrary = {};
       for (let item of info.preloadedDependencies) {
         if (item.machineName == id) {
@@ -630,8 +586,9 @@ module.exports = {
           break;
         }
       }
-      const machineName = `${id} ${cache.view[library][library].version.major}.${cache.view[library][library].version.minor}`;
+      const machineName = `${id} ${libs[library].version.major}.${libs[library].version.minor}`;
       const labels = await getLangLabels();
+      const libraryDirectories = JSON.stringify((await ajaxLibraries({ machineName: id })).directories);
       let input = {
         assets: config.folders.assets,
         libraries: config.folders.libraries,
@@ -642,9 +599,11 @@ module.exports = {
         session: session.name,
         sessions: JSON.stringify(sessions),
         machineName,
-        version: `${cache.view[library][library].version.major}.${cache.view[library][library].version.minor}`,
+        version: `${libs[library].version.major}.${libs[library].version.minor}`,
         contentVersion: `${mainLibrary.majorVersion}.${mainLibrary.minorVersion}`,
         id,
+        fullscreen: libs[library].fullscreen,
+        libraryDirectories,
         jsonContent: JSON.stringify(jsonContent),
         preloadedCss: JSON.stringify(preloadedCss),
         preloadedJs: JSON.stringify(preloadedJs),
@@ -655,7 +614,8 @@ module.exports = {
         contentUserData: JSON.stringify(userData.resume),
         watcher: config.files.watch,
         simple: request.query.simple ? 'hidden' : '',
-        delete: config.contentDeletable ? '' : 'hidden'
+        delete: config.contentDeletable ? '' : 'hidden',
+        saveFreq: config.saveFreq
       }
       input = {...input, ...labels};
       response.set('Content-Type', 'text/html');
@@ -666,6 +626,85 @@ module.exports = {
     }
   }
 }
+
+/**
+ * Validate file for upload by mime type and extension.
+ * @param {string} uploadFieldType Upload field type.
+ * @param {string} mimeType File's mime type.
+ * @param {string} extension File's extension.
+ * @returns {string} Error message or 'OK'.
+ */
+const validateFileForUpload = (uploadFieldType, mimeType, extension) => {
+  let allowed;
+
+  // Set allowed extensions per mime type depending on upload field type
+  switch (uploadFieldType) {
+    // Image upload field
+    case 'image':
+      allowed = {
+        'image/png': ['png'],
+        'image/jpeg': ['jpg', 'jpeg'],
+        'image/gif': ['gif'],
+      };
+      break;
+
+    // Audio upload field
+    case 'audio':
+      allowed = {
+        'audio/mpeg': ['mp3'],
+        'audio/mp3': ['mp3'],
+        'audio/mp4': ['m4a'],
+        'audio/x-wav': ['wav'],
+        'audio/wav': ['wav'],
+        'audio/ogg': ['ogg'],
+      };
+      break;
+
+    // Video upload field
+    case 'video':
+      allowed = {
+        'video/mp4': ['mp4'],
+        'video/webm': ['webm'],
+        'video/ogg': ['ogv'],
+      };
+      break;
+
+    // File upload field
+    case 'file':
+      const allowedExtensions = config.files.patterns.allowed.toString()
+        .replace(/[^a-zA-Z0-9|]/g, '')
+        .split('|');
+      allowed = { '*': allowedExtensions }; // Allow allowedExtensions for all mime types
+      break;
+
+    default:
+      allowed = {};
+  }
+
+  const isExtensionAllowed = (allowed[mimeType] ?? allowed['*'] ?? []).includes(extension);
+  const message = isExtensionAllowed ? 'OK' : `Invalid ${uploadFieldType} file format.`;
+  const extensionsToUse = isExtensionAllowed ? '' : listExtensions(Object.values(allowed).flat());
+
+  return [message, extensionsToUse].filter(Boolean).join(' ');
+}
+
+/**
+ * List extension options as human language string.
+ * @param {string[]} extensions List of extensions.
+ * @returns {string} Human language string.
+ */
+const listExtensions = (extensions = []) => {
+  if (!Array.isArray(extensions) || !extensions.length) {
+    return '';
+  }
+  else if (extensions.length === 1) {
+    return `Use ${extensions[0]}.`;
+  }
+  else {
+    return `Use ${extensions.slice(0, -1).join(', ')} or ${extensions.slice(-1)}.`;
+  }
+};
+
 // parses content.json objects for entries of file type
 const parseContentFiles = (entries) => {
   let toDo = [];
@@ -699,27 +738,25 @@ const parseContentFiles = (entries) => {
 /* generates lists of JavaScript & CSS files to load
 as well as translations and directories entries for use in content types */
 const computePreloaded = async (library, baseUrl) => {
-  const cacheFile = `${config.folders.cache}/${library}_edit.json`;
-  if (!cache?.edit[library]) {
-    if (fs.existsSync(cacheFile)) {
-      cache.edit[library] = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
-    }
-    else {
-      process.stdout.write(`>> computing dependency list for ${library} ... `);
-      cache.edit[library] = await logic.computeDependencies(library, 'edit', true);
-      console.log(' done');
-    }
-  }
+  const registry = await logic.getRegistry();
+  const libraryDirs = await logic.parseLibraryFolders();
+  const libs = await logic.computeDependencies(library, 'edit', null, libraryDirs[registry.regular[library].id]);
   const directories = {};
   const translations = {};
   const languages = [];
   let preloadedJs = [];
   let preloadedCss = [];
-  for (let item in cache.edit[library]) {
-    const entry = cache.edit[library][item];
-    const label = `${entry.id}-${entry.version.major}.${entry.version.minor}`;
-    const fullLabel = `${label}.${entry.version.patch}`;
-    const languageFolder = `${config.folders.libraries}/${label}/language`;
+  for (let item in libs) {
+    const entry = libs[item];
+    if (!entry.id) {
+      continue;
+    }
+    const folder = libraryDirs[entry.id];
+    if (!folder) {
+      continue;
+    }
+    const label = `${entry.id}-${entry.version.major}.${entry.version.minor}.${entry.version.patch}`;
+    const languageFolder = `${config.folders.libraries}/${folder}/language`;
     const langFile = `${languageFolder}/${session.language}.json`;
     if (fs.existsSync(langFile)) {
       translations[entry.id] = JSON.parse(fs.readFileSync(langFile, 'utf-8'));
@@ -743,14 +780,78 @@ const computePreloaded = async (library, baseUrl) => {
       }
     }
     for (let jsItem of entry.preloadedJs) {
-      preloadedJs.push(`${baseUrl}/${config.folders.libraries}/${label}/${jsItem.path}`);
+      preloadedJs.push(`${baseUrl}/${config.folders.libraries}/${folder}/${jsItem.path}`);
     }
     for (let cssItem of entry.preloadedCss) {
-      preloadedCss.push(`${baseUrl}/${config.folders.libraries}/${label}/${cssItem.path}`);
+      preloadedCss.push(`${baseUrl}/${config.folders.libraries}/${folder}/${cssItem.path}`);
     }
-    directories[label] = fullLabel;
+    directories[folder] = label;
   }
   return { library, preloadedJs, preloadedCss, languages, translations, directories };
+}
+const ajaxLibraries = async (options) => {
+  const baseUrl = config.api;
+  const registry = await logic.getRegistry();
+  const libraryDirs = await logic.parseLibraryFolders();
+  let libraries = [options.library];
+  if (Array.isArray(options.libraries)) {
+    libraries = [];
+    for (let item of options.libraries) {
+      item = item.split(' ')[0];
+      if (!registry.reversed[item] || !libraryDirs[item]) {
+        continue;
+      }
+      libraries.push(registry.reversed[item].shortName);
+    }
+  }
+  if (options.machineName) {
+    libraries = [];
+    libraries.push(registry.reversed[options.machineName].shortName);
+  }
+  const toDo = [];
+  for (let item of libraries) {
+    toDo.push(computePreloaded(item, baseUrl));
+  }
+  const preloaded = await Promise.all(toDo);
+  let output;
+  if (options.machineName) {
+    const library = libraries[0];
+    const libs = await logic.computeDependencies(library, 'edit', null, libraryDirs[registry.regular[library].id]);
+    const version = libs[library].version;
+    const folder = libraryDirs[libs[library].id];
+    output = {
+      name: libs[library].id,
+      version,
+      title: libs[library].title,
+      upgradesScript: `${baseUrl}/${config.folders.libraries}/${folder}/upgrades.js`,
+      semantics: JSON.parse(fs.readFileSync(`${config.folders.libraries}/${folder}/semantics.json`, 'utf-8')),
+      language: null,
+      defaultLanguage: null,
+      languages: preloaded[0].languages,
+      javascript: preloaded[0].preloadedJs,
+      css: preloaded[0].preloadedCss,
+      translations: preloaded[0].translations,
+      directories: preloaded[0].directories
+    }
+  }
+  else {
+    output = [];
+    for (let item of preloaded) {
+      const library = item.library;
+      const libs = await logic.computeDependencies(library, 'edit', null, libraryDirs[registry.regular[library].id]);
+      output.push({
+        uberName: `${libs[library].id} ${libs[library].version.major}.${libs[library].version.minor}`,
+        name: libs[library].id,
+        majorVersion: libs[library].version.major,
+        minorVersion: libs[library].version.minor,
+        title: libs[library].title,
+        runnable: libs[library].runnable,
+        restricted: false,
+        metadataSettings: libs[library].metadataSettings
+      });
+    }
+  }
+  return output;
 }
 const handleError = (error, response) => {
   console.log(error);
@@ -806,3 +907,21 @@ const getLangLabels = async () => {
   }
   return await logic.getFile(langFile, true);
 }
+
+ /* Reset content user data.
+ * @param {string} folder Folder name (contentId) if content to reset user data for.
+ */
+const resetContentUserData = (folder) => {
+  const sessionsDir = `content/${folder}/sessions`;
+  fs.readdirSync(sessionsDir).forEach((file) => {
+    if (path.extname(file) !== '.json') {
+      return;
+    }
+    const dataFile = path.join(sessionsDir, file);
+    const data = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+    data.resume.forEach(entry => {
+      entry.state = null; // Means to reset state for H5P core
+    });
+    fs.writeFileSync(dataFile, JSON.stringify(data, null, 2));
+  });
+};

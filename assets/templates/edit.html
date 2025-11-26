@@ -3,8 +3,10 @@
 <head>
 <title>h5p-dev {lang_Edit} - {title}</title>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" type="text/css" href="/{assets}/styles/reset.css">
 <link rel="stylesheet" type="text/css" href="/{assets}/styles/style.css">
+<link rel="stylesheet" type="text/css" href="/{assets}/styles/h5p.css">
 <script type="text/javascript" src="/{assets}/scripts/delete.js"></script>
 <script type="text/javascript">
   H5PIntegration = {
@@ -41,6 +43,11 @@
       metadataSemantics: {metadataSemantics},
       libraryUrl: "/{libraries}/h5p-editor-php-library/",
       nodeVersionId: "{folder}",
+      fileIcon: {
+        path: "/{libraries}/h5p-editor-php-library/images/binary-file.png",
+        width: 50,
+        height: 50
+      },
       assets: {
         css: [
           "/{assets}/styles/editor.css",
@@ -48,7 +55,7 @@
           "/{libraries}/h5p-php-library/styles/h5p-confirmation-dialog.css",
           "/{libraries}/h5p-php-library/styles/h5p-core-button.css",
           "/{libraries}/h5p-php-library/styles/h5p-tooltip.css",
-          "/{libraries}/h5p-editor-php-library/libs/darkroom.css",
+          "/{libraries}/h5p-editor-php-library/libs/cropper.css",
           "/{libraries}/h5p-editor-php-library/styles/css/h5p-hub-client.css",
           "/{libraries}/h5p-editor-php-library/styles/css/fonts.css",
           "/{libraries}/h5p-editor-php-library/styles/css/application.css",
@@ -103,6 +110,8 @@
       }
     },
     libraryConfig: {libraryConfig},
+    urlLibraries: "{baseUrl}/{libraries}",
+    libraryDirectories: {libraryDirectories},
     user: { name: "developer", mail: "some.developer@some.company.com" }
   };
   H5PIntegration.l10n = {l10n};

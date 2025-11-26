@@ -19,19 +19,27 @@ const OK = 'ok';
  * May supply flag for showing diff.
  *
  * @param {Array} inputList
+ * @returns {Promise} Validation results.
  */
 module.exports = function (...inputList) {
-
-  const input = new Input(inputList);
-  var results = [];
-  input.init().then(() => {
-    const libraries = input.getLibraries();
-
-    parallel(libraries, (index, library, done) => {
-      validateLibrary(library, done);
-    }, (error, results) => {
-      // Finished with all libraries
-      outputReport(results);
+  return new Promise((resolve, reject) => {
+    const input = new Input(inputList);
+    var results = [];
+    input.init().then(() => {
+      const libraries = input.getLibraries();
+      if (libraries.length === 0) {
+        reject(new Error('no valid libraries found; use \'-f\' to skip validation'));
+      }
+      parallel(libraries, (index, library, done) => {
+        validateLibrary(library, done);
+      }, (error, results) => {
+        // Finished with all libraries
+        outputReport(results);
+        resolve(results);
+      });
+    })
+    .catch((error) => {
+      console.log(error.message);
     });
   });
 };
@@ -98,7 +106,7 @@ const validateLanguageFiles = (libraryDir, libraryJson, done) => {
   if (!fs.existsSync(languageDir)) {
     return done(results);
   }
-
+  
   const isEditorLib = isEditorLibrary(libraryJson);
 
   var languageFiles = fs.readdirSync(languageDir);
@@ -158,7 +166,6 @@ const validateLanguageFiles = (libraryDir, libraryJson, done) => {
           };
         }
       });
-
       done(results);
     });
   }
@@ -166,53 +173,34 @@ const validateLanguageFiles = (libraryDir, libraryJson, done) => {
     // Add Semantics.json
     //fileNames['semantics.json'] = libraryDir + '/semantics.json';
     //
-    //
-
     h5p.readJSONFiles(fileNames, function (files) {
       // Need semantics.json
       //if(files['semantics.json']);
 
-      if (files['.en.json'] !== undefined) {
+      var defaultLangSemantics = h5p.createDefaultLanguage(libraryDir);
 
-        var defaultLang = files['.en.json'].content;
+      Object.keys(files).forEach(filename => {
+        testLang = files[filename].content;
+        // Make sure language exists and has semantics
+        if (typeof testLang === 'object' && testLang.semantics) {
+          // Perform the language comparison
+          var validation = languageComparison(testLang.semantics, defaultLangSemantics);
 
-        Object.keys(files).forEach(filename => {
-          testLang = files[filename].content;
-          // Make sure language exists and has semantics
-          if (typeof testLang === 'object' && testLang.semantics) {
-            // Perform the language comparison
-            var validation = languageComparison(testLang.semantics, defaultLang.semantics);
-
-            results[filename] = {
-              status: validation.hasValidJson ? OK : ERROR,
-              message: validation.hasValidJson ? undefined : validation.errors /*'Language file differs from .en.json'*/
-            };
-          }
-          else {
-            results[filename] = {
-              status: ERROR,
-              message: 'Empty/invalid language file'
-            };
-          }
-
-        });
-      }
-      else {
-        results['all.json'] = {
-          status: WARNING,
-          message: 'No .en.json to compare to'
-        };
-      }
-
+          results[filename] = {
+            status: validation.hasValidJson ? OK : ERROR,
+            message: validation.hasValidJson ? undefined : validation.errors /*'Language file differs from default.json'*/
+          };
+        }
+        else {
+          results[filename] = {
+            status: ERROR,
+            message: 'Empty/invalid language file'
+          };
+        }
+      });
       done(results);
     });
   }
-};
-
-
-
-const validateLanguageFile = (file) => {
-
 };
 
 /**

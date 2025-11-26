@@ -7,13 +7,13 @@ module.exports = {
   folders: {
     assets: 'assets',
     libraries: 'libraries',
-    cache: 'cache',
     temp: 'temp'
   },
   files: {
     watch: true,
+    watchExclusions: [/node_modules\//],
     patterns: {
-      allowed: /\.(json|png|jpg|jpeg|gif|bmp|tif|tiff|svg|eot|ttf|woff|woff2|otf|webm|mp4|ogg|mp3|txt|pdf|rtf|doc|docx|xls|xlsx|ppt|pptx|odt|ods|odp|xml|csv|diff|patch|swf|md|textile|js|css)$/,
+      allowed: /\.(json|png|jpg|jpeg|gif|bmp|tif|tiff|eot|ttf|woff|woff2|otf|webm|mp4|ogg|mp3|m4a|wav|txt|pdf|rtf|doc|docx|xls|xlsx|ppt|pptx|odt|ods|odp|csv|diff|patch|swf|md|textile|vtt|webvtt|gltf|glb|js|css|svg|xml)$/,
       ignored: /^\.|~$/gi
     }
   },
@@ -41,8 +41,13 @@ module.exports = {
       { id: 1, name: 'admin', password: '123', roles: ['admin'] },
       { id: 2, name: 'user', password: '321', roles: ['user'] }
     ]
-  }
+  },
+  saveFreq: 30
 }
+if (process.argv[3] && process.argv[2] === 'server') {
+  module.exports.port = +process.argv[3];
+}
+module.exports.api = `http://localhost:${module.exports.port}`; // change this if you want to expose the server to the internet
 // files.patterns.allowed & files.patterns.ignored are used in the export logic to determine which files are allowed/ignored in the .h5p zip archive
 module.exports.files.patterns.allowed = process.env.h5p_cli_allowed_files ? new RegExp(process.env.h5p_cli_allowed_files, process.env.h5p_cli_allowed_modifiers) : module.exports.files.patterns.allowed;
 module.exports.files.patterns.ignored = process.env.h5p_cli_ignored_files ? new RegExp(process.env.h5p_cli_ignored_files, process.env.h5p_cli_ignored_modifiers) : module.exports.files.patterns.ignored;
